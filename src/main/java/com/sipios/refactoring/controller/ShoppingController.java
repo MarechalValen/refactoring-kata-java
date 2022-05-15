@@ -1,176 +1,63 @@
 package com.sipios.refactoring.controller;
 
-import java.util.Calendar;
-import java.util.Date;
-import java.util.TimeZone;
+import com.sipios.refactoring.exception.CustomerException;
+import com.sipios.refactoring.model.Price;
+import com.sipios.refactoring.model.ShoppingCart;
+import com.sipios.refactoring.service.ShoppingServiceInterface;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.NonNull;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/shopping")
 public class ShoppingController {
 
+    @Autowired
+    private ShoppingServiceInterface shoppingServiceInterface;
+
     private Logger logger = LoggerFactory.getLogger(ShoppingController.class);
 
     @PostMapping
-    public String getPrice(@RequestBody Body b) {
-        double p = 0;
-        double d;
+    public Price getPrice(@RequestBody @NonNull ShoppingCart shoppingCart) {
 
-        Date date = new Date();
-        Calendar cal = Calendar.getInstance(TimeZone.getTimeZone("Europe/Paris"));
-        cal.setTime(date);
-
-        // Compute discount for customer
-        if (b.getType().equals("STANDARD_CUSTOMER")) {
-            d = 1;
-        } else if (b.getType().equals("PREMIUM_CUSTOMER")) {
-            d = 0.9;
-        } else if (b.getType().equals("PLATINUM_CUSTOMER")) {
-            d = 0.5;
-        } else {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-        }
-
-        // Compute total amount depending on the types and quantity of product and
-        // if we are in winter or summer discounts periods
-        if (
-            !(
-                cal.get(Calendar.DAY_OF_MONTH) < 15 &&
-                cal.get(Calendar.DAY_OF_MONTH) > 5 &&
-                cal.get(Calendar.MONTH) == 5
-            ) &&
-            !(
-                cal.get(Calendar.DAY_OF_MONTH) < 15 &&
-                cal.get(Calendar.DAY_OF_MONTH) > 5 &&
-                cal.get(Calendar.MONTH) == 0
-            )
-        ) {
-            if (b.getItems() == null) {
-                return "0";
-            }
-
-            for (int i = 0; i < b.getItems().length; i++) {
-                Item it = b.getItems()[i];
-
-                if (it.getType().equals("TSHIRT")) {
-                    p += 30 * it.getNb() * d;
-                } else if (it.getType().equals("DRESS")) {
-                    p += 50 * it.getNb() * d;
-                } else if (it.getType().equals("JACKET")) {
-                    p += 100 * it.getNb() * d;
-                }
-                // else if (it.getType().equals("SWEATSHIRT")) {
-                //     price += 80 * it.getNb();
-                // }
-            }
-        } else {
-            if (b.getItems() == null) {
-                return "0";
-            }
-
-            for (int i = 0; i < b.getItems().length; i++) {
-                Item it = b.getItems()[i];
-
-                if (it.getType().equals("TSHIRT")) {
-                    p += 30 * it.getNb() * d;
-                } else if (it.getType().equals("DRESS")) {
-                    p += 50 * it.getNb() * 0.8 * d;
-                } else if (it.getType().equals("JACKET")) {
-                    p += 100 * it.getNb() * 0.9 * d;
-                }
-                // else if (it.getType().equals("SWEATSHIRT")) {
-                //     price += 80 * it.getNb();
-                // }
-            }
+        if (shoppingCart.getItems().size() <= 1 ) {
+            return new Price("0.0", "Shopping cart must contain at least one item.");
         }
 
         try {
-            if (b.getType().equals("STANDARD_CUSTOMER")) {
-                if (p > 200) {
-                    throw new Exception("Price (" + p + ") is too high for standard customer");
+            double discount = shoppingServiceInterface.computeDiscount(shoppingCart.getCustomerType());
+            logger.info(String.format("SHOPPING CART : Customer with type (%s) will beneficiates a discount of (%s)", shoppingCart.getCustomerType(), discount));
+
+            double price = shoppingServiceInterface.computeAmount(shoppingCart.getItems(), discount);
+            logger.info(String.format("SHOPPING CART : Customer has to pay (%s€)", price));
+
+            shoppingServiceInterface.checkAmount(price, shoppingCart.getCustomerType());
+            logger.info("SHOPPING CART :total amount checked");
+
+            return new Price(String.valueOf(price), "Shopping cart computed with success");
+            } catch (CustomerException ce) {
+                switch (ce.getErrorCode()) {
+                    case UNKNOWN_CUSTOMER_TYPE:
+                        logger.error(String.format("SHOPPING CART : Customer type (%s) is unknwon", shoppingCart.getCustomerType()));
+                        return new Price("N/A", "The customer has an unknown type, transaction cancelled");
+                    case UNKNOWN_ITEM:
+                        logger.error("SHOPPING CART : At leat one item is unknwon");
+                        return new Price("N/A", "The customer has at least one unknown item in the shopping card, transaction cancelled");
+                    case FORBIDDEN_AMOUNT:
+                        logger.error(String.format("SHOPPING CART : total amount is too high for a customer with type (%s)", shoppingCart.getCustomerType()));
+                        return new Price("N/A", "The customer has a shopping cart amount too high for his type, transaction cancelled");
+                    default:
+                        logger.error(String.format("SHOPPING CART : an error occured : %s", ce.getMessage()));
+                        return new Price("N/A", "An error occured during shopping cart computing, please try later");
                 }
-            } else if (b.getType().equals("PREMIUM_CUSTOMER")) {
-                if (p > 800) {
-                    throw new Exception("Price (" + p + ") is too high for premium customer");
-                }
-            } else if (b.getType().equals("PLATINUM_CUSTOMER")) {
-                if (p > 2000) {
-                    throw new Exception("Price (" + p + ") is too high for platinum customer");
-                }
-            } else {
-                if (p > 200) {
-                    throw new Exception("Price (" + p + ") is too high for standard customer");
-                }
+            } catch (Exception e) {
+            logger.error(String.format("SHOPPING CART : an error occured : %s", e.getMessage()));
+            return new Price("N/A", "An error occured during shopping cart computing, please try later");
             }
-        } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
-
-        return String.valueOf(p);
-    }
-}
-
-class Body {
-
-    private Item[] items;
-    private String type;
-
-    public Body(Item[] is, String t) {
-        this.items = is;
-        this.type = t;
-    }
-
-    public Body() {}
-
-    public Item[] getItems() {
-        return items;
-    }
-
-    public void setItems(Item[] items) {
-        this.items = items;
-    }
-
-    public String getType() {
-        return type;
-    }
-
-    public void setType(String type) {
-        this.type = type;
-    }
-}
-
-class Item {
-
-    private String type;
-    private int nb;
-
-    public Item() {}
-
-    public Item(String type, int quantity) {
-        this.type = type;
-        this.nb = quantity;
-    }
-
-    public String getType() {
-        return type;
-    }
-
-    public void setType(String type) {
-        this.type = type;
-    }
-
-    public int getNb() {
-        return nb;
-    }
-
-    public void setNb(int nb) {
-        this.nb = nb;
-    }
 }
